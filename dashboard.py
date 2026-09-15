@@ -12,8 +12,11 @@ from zoneinfo import ZoneInfo
 CHILE_TZ = ZoneInfo("America/Santiago")  # maneja UTC-3/UTC-4 automáticamente
 
 def to_chile(ts_series):
-    """Convierte timestamps ISO (guardados en hora del runner/UTC) a hora de Chile."""
-    t = pd.to_datetime(ts_series, utc=True)
+    """Convierte timestamps a hora de Chile, tolerante a formatos mixtos
+    (naive viejos y UTC nuevos). Los naive se asumen en UTC."""
+    # format="mixed" + utc=True maneja tanto '2026-09-15T20:30:00' como
+    # '2026-09-15T20:30:00+00:00' en la misma columna sin reventar.
+    t = pd.to_datetime(ts_series, utc=True, format="mixed", errors="coerce")
     return t.dt.tz_convert(CHILE_TZ)
 
 st.set_page_config(page_title="Option Magnets", layout="wide")
