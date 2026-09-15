@@ -115,7 +115,7 @@ def fetch_ticker(ticker):
         print(f"  [!] No pude obtener vencimientos de {ticker}: {e}")
         return (spot, [])
 
-    now = dt.datetime.now()
+    now = dt.datetime.now(dt.timezone.utc)
     today = now.date()
     rows = []
 
