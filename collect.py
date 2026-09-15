@@ -131,11 +131,13 @@ def fetch_ticker(ticker):
 
         for opt_type, df in (("C", chain.calls), ("P", chain.puts)):
             for _, r in df.iterrows():
-                strike = float(r.get("strike", 0) or 0)
+                strike = _num(r.get("strike"))
+                if strike is None or strike <= 0:
+                    continue  # fila sin strike válido, la saltamos
                 iv = r.get("impliedVolatility", None)
                 iv = float(iv) if iv == iv and iv is not None else None  # NaN check
-                oi = int(r.get("openInterest", 0) or 0)
-                vol = int(r.get("volume", 0) or 0)
+                oi = _int(r.get("openInterest"))
+                vol = _int(r.get("volume"))
 
                 delta, gamma = bs_greeks(spot, strike, t_years, iv, opt_type)
 
@@ -175,6 +177,16 @@ def _num(x):
         return round(float(x), 4)
     except (TypeError, ValueError):
         return None
+
+
+def _int(x):
+    """Convierte a int de forma segura: NaN, None o vacío -> 0."""
+    try:
+        if x is None or x != x:   # x != x detecta NaN
+            return 0
+        return int(x)
+    except (TypeError, ValueError):
+        return 0
 
 
 # ---------------------------------------------------------------------------
