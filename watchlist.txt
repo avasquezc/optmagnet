@@ -1,5 +1,5 @@
 # Un ticker por línea. Las líneas que empiezan con # se ignoran.
 # Edita esto para cambiar qué instrumentos monitoreas.
 META
-NVDA
+QQQ
 SPY
