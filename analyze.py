@@ -145,19 +145,26 @@ def gex_recalc_at_spot(df, spot_override, snap_date):
 
 
 def walls(df):
-    """Call wall (mayor call OI) y put wall (mayor put OI) — los muros."""
+    """Call wall = mayor call OI POR ENCIMA del spot (resistencia).
+       Put wall = mayor put OI POR DEBAJO del spot (soporte)."""
+    spot = float(df["spot"].iloc[0]) if len(df) else None
     calls = df[df.type == "C"].groupby("strike")["open_interest"].sum()
     puts = df[df.type == "P"].groupby("strike")["open_interest"].sum()
-    call_wall = calls.idxmax() if len(calls) and calls.max() > 0 else None
-    put_wall = puts.idxmax() if len(puts) and puts.max() > 0 else None
-    # zero gamma aprox: strike donde el GEX neto cruza de negativo a positivo
+    # call wall: solo strikes >= spot
+    if spot is not None:
+        calls_above = calls[calls.index >= spot]
+        puts_below = puts[puts.index <= spot]
+    else:
+        calls_above, puts_below = calls, puts
+    call_wall = calls_above.idxmax() if len(calls_above) and calls_above.max() > 0 else None
+    put_wall = puts_below.idxmax() if len(puts_below) and puts_below.max() > 0 else None
     return {"call_wall": call_wall, "put_wall": put_wall}
 
 
 def bubble_map_data(ticker, snap_date, expiration=None, metric="gex"):
     """
-    Datos para el mapa de burbujas tipo imagen 3: para cada timestamp del día,
-    magnitud (gex u oi) por strike + spot. Devuelve un DataFrame largo.
+    Datos para el mapa de burbujas. metric: 'gex', 'oi' o 'volume'.
+    Para 'volume' incluye columna 'side' (C/P) para colorear por tipo.
     """
     tss = list_timestamps(ticker, snap_date)
     frames = []
@@ -169,14 +176,50 @@ def bubble_map_data(ticker, snap_date, expiration=None, metric="gex"):
         if metric == "gex":
             g = gex_recalc_at_spot(d, spot, snap_date)
             g["magnitude"] = g["gex"]
-        else:  # oi
+            g["side"] = "net"
+        elif metric == "volume":
+            g = d.groupby(["strike", "type"])["volume"].sum().reset_index()
+            g = g.rename(columns={"volume": "magnitude", "type": "side"})
+        else:  # oi neto
             g = d.groupby("strike").apply(
                 lambda x: (x[x.type=="C"]["open_interest"].sum()
                            - x[x.type=="P"]["open_interest"].sum())
             ).reset_index(name="magnitude")
+            g["side"] = "net"
         g["ts"] = ts
         g["spot"] = spot
-        frames.append(g[["ts", "strike", "magnitude", "spot"]])
+        frames.append(g[["ts", "strike", "magnitude", "spot", "side"]])
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def gamma_levels(df, snap_date):
+    """
+    Niveles clave de gamma para la pestaña de régimen de volatilidad:
+    - gamma_flip: strike donde el GEX neto acumulado cruza de - a + (o el más cercano).
+      Por encima: dealers amortiguan (estable). Por debajo: aceleran (volátil).
+    - gex_peak: strike con mayor GEX positivo = imán de reposo real.
+    """
+    spot = float(df["spot"].iloc[0]) if len(df) else None
+    g = gex_recalc_at_spot(df, spot, snap_date) if spot else gex_profile(df)
+    g = g.sort_values("strike").reset_index(drop=True)
+    if g.empty:
+        return {"gamma_flip": None, "gex_peak": None}
+
+    # pico de gamma positiva
+    pos = g[g["gex"] > 0]
+    gex_peak = pos.loc[pos["gex"].idxmax(), "strike"] if len(pos) else None
+
+    # gamma flip: primer strike (de abajo hacia arriba) donde el gex pasa de <=0 a >0
+    flip = None
+    vals = g["gex"].values
+    strikes = g["strike"].values
+    for i in range(1, len(vals)):
+        if vals[i - 1] <= 0 and vals[i] > 0:
+            # interpola linealmente entre los dos strikes para el cruce
+            x0, x1 = strikes[i - 1], strikes[i]
+            y0, y1 = vals[i - 1], vals[i]
+            flip = x0 + (x1 - x0) * (0 - y0) / (y1 - y0) if (y1 - y0) else x1
+            break
+    return {"gamma_flip": flip, "gex_peak": gex_peak}
