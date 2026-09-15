@@ -8,7 +8,7 @@ import os
 import requests
 
 # Ajusta estos dos a tu repo cuando lo crees:
-GH_OWNER = "TU_USUARIO_GITHUB"
+GH_OWNER = "avasquezc"
 GH_REPO = "optmagnet"
 WORKFLOW_FILE = "collect.yml"   # nombre del archivo en .github/workflows/
 BRANCH = "main"
