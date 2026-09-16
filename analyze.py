@@ -161,10 +161,13 @@ def walls(df):
     return {"call_wall": call_wall, "put_wall": put_wall}
 
 
-def bubble_map_data(ticker, snap_date, expiration=None, metric="gex"):
+def bubble_map_data(ticker, snap_date, expiration=None, metric="gex", volume_mode="new"):
     """
     Datos para el mapa de burbujas. metric: 'gex', 'oi' o 'volume'.
     Para 'volume' incluye columna 'side' (C/P) para colorear por tipo.
+    volume_mode (solo aplica a metric='volume'):
+      - 'new': volumen NUEVO por franja (delta vs corrida anterior). Detecta flujo fresco.
+      - 'cumulative': volumen acumulado tal cual lo reporta la fuente.
     """
     tss = list_timestamps(ticker, snap_date)
     frames = []
@@ -191,7 +194,20 @@ def bubble_map_data(ticker, snap_date, expiration=None, metric="gex"):
         frames.append(g[["ts", "strike", "magnitude", "spot", "side"]])
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    out = pd.concat(frames, ignore_index=True)
+
+    # Volumen NUEVO por franja: delta contra la corrida anterior, por strike+side.
+    if metric == "volume" and volume_mode == "new":
+        out = out.sort_values("ts")
+        # volumen previo por (strike, side)
+        out["prev"] = out.groupby(["strike", "side"])["magnitude"].shift(1)
+        # primera corrida del día: no hay previo -> el acumulado ES lo nuevo hasta ese punto
+        out["delta"] = out["magnitude"] - out["prev"].fillna(0)
+        # deltas negativos = dato sucio de la fuente (el volumen no puede bajar). Los anulamos.
+        out["delta"] = out["delta"].clip(lower=0)
+        out["magnitude"] = out["delta"]
+        out = out.drop(columns=["prev", "delta"])
+    return out
 
 
 def gamma_levels(df, snap_date):
