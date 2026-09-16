@@ -102,21 +102,22 @@ def render_bubble(ticker, key):
     lo, hi = _window(spot)
     bm = bm[(bm.strike >= lo) & (bm.strike <= hi)].copy()
     bm["abs_mag"] = bm["magnitude"].abs()
-    # --- Escala de tamaño: logarítmica + excluir la 1ª franja del cálculo del máximo ---
-    # La 1ª franja del día trae el volumen sucio de apertura (dato inflado de la fuente),
-    # que aplastaría la escala. La dibujamos, pero calibramos el tamaño con el resto.
+    # --- Escala de tamaño: RAÍZ CUADRADA + cap al percentil 95 (excluye 1ª franja) ---
+    # Raíz cuadrada = punto medio entre lineal (grande aplasta todo) y log (grande y
+    # chico se ven casi iguales): 25.000 se ve claramente mayor que 900, y 900 sigue
+    # visible. El cap p95 doma las burbujas gigantes de apertura sin borrarlas.
     import numpy as np
     ts_sorted = sorted(bm["ts"].unique())
     if len(ts_sorted) > 1:
         scale_pool = bm[bm["ts"] != ts_sorted[0]]["abs_mag"]  # todo menos la 1ª franja
     else:
         scale_pool = bm["abs_mag"]
-    # tope de escala = percentil 98 del pool (robusto ante un outlier suelto)
-    cap = scale_pool.quantile(0.98) if len(scale_pool) else bm["abs_mag"].max()
+    cap = scale_pool.quantile(0.95) if len(scale_pool) else bm["abs_mag"].max()
     cap = cap or 1
-    # log1p comprime el rango; normalizamos contra log del cap
-    denom = np.log1p(cap) or 1
-    bm["size"] = 6 + 34 * (np.log1p(bm["abs_mag"].clip(upper=cap * 3)) / denom).clip(upper=1.4)
+    # capamos por arriba (no borramos el dato, solo su tamaño) y aplicamos raíz cuadrada
+    capped = bm["abs_mag"].clip(upper=cap)
+    denom = np.sqrt(cap) or 1
+    bm["size"] = 6 + 34 * (np.sqrt(capped) / denom)
     bm["dt"] = to_chile(bm["ts"])
     fig = go.Figure()
     if metric == "volume":
