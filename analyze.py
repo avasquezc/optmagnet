@@ -13,9 +13,15 @@ def _conn():
 
 
 def list_tickers():
-    with _conn() as c:
-        return [r[0] for r in c.execute(
-            "SELECT DISTINCT ticker FROM snapshots ORDER BY ticker")]
+    """Devuelve los tickers disponibles. Lista vacía si la base no existe o está
+    vacía (aún no se ha recolectado), en vez de lanzar una excepción."""
+    try:
+        with _conn() as c:
+            return [r[0] for r in c.execute(
+                "SELECT DISTINCT ticker FROM snapshots ORDER BY ticker")]
+    except sqlite3.OperationalError:
+        # la tabla no existe todavía (base recién creada / vacía)
+        return []
 
 
 def list_snap_dates(ticker):
