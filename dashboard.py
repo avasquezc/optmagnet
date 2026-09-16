@@ -103,19 +103,19 @@ def render_bubble(ticker, key):
     bm["abs_mag"] = bm["magnitude"].abs()
     maxmag = bm["abs_mag"].max() or 1
     bm["size"] = 6 + 40 * (bm["abs_mag"] / maxmag)
-    bm["hora"] = to_chile(bm["ts"]).dt.strftime("%H:%M")
+    bm["dt"] = to_chile(bm["ts"])
     fig = go.Figure()
     if metric == "volume":
         for side, color, name in (("C", "#2ecc71", "Vol calls"), ("P", "#e74c3c", "Vol puts")):
             sub = bm[bm["side"] == side]
             if len(sub):
-                fig.add_trace(go.Scatter(x=sub["hora"], y=sub["strike"], mode="markers",
+                fig.add_trace(go.Scatter(x=sub["dt"], y=sub["strike"], mode="markers",
                     marker=dict(size=sub["size"], color=color, opacity=0.65), name=name,
                     text=sub["magnitude"].round(0),
                     hovertemplate=name+" %{text}<br>%{x}<br>strike %{y}<extra></extra>"))
     else:
         bm["color"] = bm["magnitude"].apply(lambda v: "#2ecc71" if v >= 0 else "#e74c3c")
-        fig.add_trace(go.Scatter(x=bm["hora"], y=bm["strike"], mode="markers",
+        fig.add_trace(go.Scatter(x=bm["dt"], y=bm["strike"], mode="markers",
             marker=dict(size=bm["size"], color=bm["color"], opacity=0.75), name="magnitud",
             text=bm["magnitude"].round(0),
             hovertemplate="%{x}<br>strike %{y}<br>mag %{text}<extra></extra>"))
@@ -123,22 +123,23 @@ def render_bubble(ticker, key):
     ph = A.load_price_history(ticker, snap_date)
     if not ph.empty:
         ph = ph.copy()
-        ph["hora"] = to_chile(ph["bar_time"]).dt.strftime("%H:%M")
+        ph["dt"] = to_chile(ph["bar_time"])
         # volumen de la acción como barras sutiles al fondo (eje secundario)
-        fig.add_trace(go.Bar(x=ph["hora"], y=ph["volume"], name="Vol acción",
+        fig.add_trace(go.Bar(x=ph["dt"], y=ph["volume"], name="Vol acción",
             marker_color="rgba(120,140,170,0.28)", yaxis="y2",
             hovertemplate="vol acción %{y}<br>%{x}<extra></extra>"))
         # línea de precio real (close por minuto)
-        fig.add_trace(go.Scatter(x=ph["hora"], y=ph["close"], mode="lines",
+        fig.add_trace(go.Scatter(x=ph["dt"], y=ph["close"], mode="lines",
             line=dict(color="white", width=2), name="precio",
             hovertemplate="precio %{y:.2f}<br>%{x}<extra></extra>"))
     else:
         # fallback: la línea de spot de las opciones (como antes)
-        sl = bm.drop_duplicates("ts")[["hora", "spot"]]
-        fig.add_trace(go.Scatter(x=sl["hora"], y=sl["spot"], mode="lines+markers",
+        sl = bm.drop_duplicates("ts")[["dt", "spot"]]
+        fig.add_trace(go.Scatter(x=sl["dt"], y=sl["spot"], mode="lines+markers",
             line=dict(color="white", width=2), name="spot"))
 
-    fig.update_layout(height=440, xaxis_title="Hora", yaxis_title="Strike",
+    fig.update_layout(height=440, yaxis_title="Strike",
+        xaxis=dict(title="Hora", type="date", tickformat="%H:%M"),
         plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
         legend=dict(orientation="h"), margin=dict(t=10, b=10),
         yaxis2=dict(overlaying="y", side="right", showgrid=False,
