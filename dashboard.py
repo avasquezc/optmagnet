@@ -102,22 +102,23 @@ def render_bubble(ticker, key):
     lo, hi = _window(spot)
     bm = bm[(bm.strike >= lo) & (bm.strike <= hi)].copy()
     bm["abs_mag"] = bm["magnitude"].abs()
-    # --- Escala de tamaño: cap al percentil 80 + LINEAL debajo (excluye 1ª franja) ---
-    # Todo lo que supere el p80 va al tamaño MÁXIMO (los "grandes" se ven iguales entre sí).
-    # Debajo del p80, escala lineal: máximo contraste en el rango bajo-medio, que es donde
-    # vive la mayoría de las burbujas. Así 500 vs 2.000 vs 5.000 se distinguen bien, y de
-    # ahí para arriba todo es "grande y ya". La 1ª franja (dato sucio de apertura) se
-    # excluye del cálculo del umbral.
+    # --- Escala de tamaño: LOG + cap al percentil 95 (excluye 1ª franja) ---
+    # El volumen de opciones está MUY sesgado: la mayoría de strikes tienen volumen
+    # bajo (mediana ~cientos) y unos pocos son enormes. Con escala lineal, todo el
+    # grueso queda aplastado en tamaños diminutos y se ve igual. La escala logarítmica
+    # expande el rango bajo-medio (donde vive el 80% de las burbujas), así 100, 500,
+    # 2.000 y 5.000 se distinguen bien. El cap p95 doma las gigantes de apertura.
     import numpy as np
     ts_sorted = sorted(bm["ts"].unique())
     if len(ts_sorted) > 1:
         scale_pool = bm[bm["ts"] != ts_sorted[0]]["abs_mag"]  # todo menos la 1ª franja
     else:
         scale_pool = bm["abs_mag"]
-    cap = scale_pool.quantile(0.80) if len(scale_pool) else bm["abs_mag"].max()
+    cap = scale_pool.quantile(0.95) if len(scale_pool) else bm["abs_mag"].max()
     cap = cap or 1
-    capped = bm["abs_mag"].clip(upper=cap)   # todo lo > p80 queda igualado al tope
-    bm["size"] = 6 + 34 * (capped / cap)     # lineal de 6 (mínimo) a 40 (tope)
+    capped = bm["abs_mag"].clip(upper=cap)          # gigantes igualadas al tope
+    denom = np.log1p(cap) or 1
+    bm["size"] = 6 + 34 * (np.log1p(capped) / denom)  # log: contraste en todo el rango real
     bm["dt"] = to_chile(bm["ts"])
     fig = go.Figure()
     if metric == "volume":
