@@ -90,78 +90,107 @@ def _window(spot):
 
 
 def render_bubble(ticker, key):
+    import numpy as np
     tss = A.list_timestamps(ticker, snap_date)
     df_last = A.load_ts(ticker, tss[-1], expiration) if tss else A.load(ticker, snap_date, expiration)
     spot = A.spot_of(df_last)
     st.markdown(f"**{ticker}** · spot ${spot:,.2f}" if spot else f"**{ticker}**")
     vol_mode = st.session_state.get("_vol_mode", "new")
-    bm = A.bubble_map_data(ticker, snap_date, expiration, metric=metric, volume_mode=vol_mode)
-    if bm.empty:
-        st.info(f"Sin timestamps intradía para {ticker} en este día.")
-        return
-    lo, hi = _window(spot)
-    bm = bm[(bm.strike >= lo) & (bm.strike <= hi)].copy()
-    bm["abs_mag"] = bm["magnitude"].abs()
-    # --- Escala de tamaño: LOG + cap al percentil 95 (excluye 1ª franja) ---
-    # El volumen de opciones está MUY sesgado: la mayoría de strikes tienen volumen
-    # bajo (mediana ~cientos) y unos pocos son enormes. Con escala lineal, todo el
-    # grueso queda aplastado en tamaños diminutos y se ve igual. La escala logarítmica
-    # expande el rango bajo-medio (donde vive el 80% de las burbujas), así 100, 500,
-    # 2.000 y 5.000 se distinguen bien. El cap p95 doma las gigantes de apertura.
-    import numpy as np
-    ts_sorted = sorted(bm["ts"].unique())
-    if len(ts_sorted) > 1:
-        scale_pool = bm[bm["ts"] != ts_sorted[0]]["abs_mag"]  # todo menos la 1ª franja
-    else:
-        scale_pool = bm["abs_mag"]
-    cap = scale_pool.quantile(0.95) if len(scale_pool) else bm["abs_mag"].max()
-    cap = cap or 1
-    capped = bm["abs_mag"].clip(upper=cap)          # gigantes igualadas al tope
-    denom = np.log1p(cap) or 1
-    bm["size"] = 6 + 34 * (np.log1p(capped) / denom)  # log: contraste en todo el rango real
-    bm["dt"] = to_chile(bm["ts"])
+
+    # ---- Precio y volumen de la acción (común a todas las métricas) ----
+    ph = A.load_price_history(ticker, snap_date)
+    price_max = (ph["volume"].max() if not ph.empty and ph["volume"].max() else 1)
+
     fig = go.Figure()
+
     if metric == "volume":
-        for side, color, name in (("C", "#2ecc71", "Vol calls"), ("P", "#e74c3c", "Vol puts")):
-            sub = bm[bm["side"] == side]
-            if len(sub):
-                fig.add_trace(go.Scatter(x=sub["dt"], y=sub["strike"], mode="markers",
-                    marker=dict(size=sub["size"], color=color, opacity=0.65), name=name,
-                    text=sub["magnitude"].round(0),
-                    hovertemplate=name+" %{text}<br>%{x}<br>strike %{y}<extra></extra>"))
+        # ===== HEATMAP divergente + burbujas grandes =====
+        hm = A.heatmap_data(ticker, snap_date, expiration, volume_mode=vol_mode)
+        if hm.empty:
+            st.info(f"Sin timestamps intradía para {ticker} en este día.")
+            return
+        lo, hi = _window(spot)
+        hm = hm[(hm.strike >= lo) & (hm.strike <= hi)].copy()
+        hm["dt"] = to_chile(hm["ts"])
+
+        # --- Capa 1: heatmap. Color = net (calls - puts), intensidad = |net| ---
+        # Construimos matriz strike x tiempo con el valor 'net'.
+        pivot = hm.pivot_table(index="strike", columns="dt", values="net", aggfunc="sum", fill_value=0)
+        # escala de color simétrica robusta (percentil 95 del |net|, sin 1ª franja)
+        ts_cols = list(pivot.columns)
+        if len(ts_cols) > 1:
+            pool = hm[hm["dt"] != ts_cols[0]]["net"].abs()
+        else:
+            pool = hm["net"].abs()
+        cmax = pool.quantile(0.95) if len(pool) else hm["net"].abs().max()
+        cmax = cmax or 1
+        fig.add_trace(go.Heatmap(
+            z=pivot.values, x=list(pivot.columns), y=list(pivot.index),
+            zmid=0, zmin=-cmax, zmax=cmax,
+            colorscale=[[0, "#c0392b"], [0.5, "#0e1117"], [1, "#27ae60"]],
+            showscale=False, hoverongaps=False,
+            hovertemplate="strike %{y}<br>%{x}<br>net %{z}<extra></extra>", name="heatmap"))
+
+        # --- Capa 2: burbujas SOLO para el 15% más alto (p85) por volumen total ---
+        big_pool = hm[hm["dt"] != ts_cols[0]]["vol_total"] if len(ts_cols) > 1 else hm["vol_total"]
+        thr = big_pool.quantile(0.85) if len(big_pool) else 0
+        big = hm[hm["vol_total"] >= max(thr, 1)].copy()
+        if len(big):
+            # Tamaño calibrado SOLO dentro del grupo de grandes, para maximizar el
+            # contraste entre mediana / grande / muy grande. Usamos el mín y máx de las
+            # grandes como extremos, con raíz cuadrada (contraste parejo) y rango amplio.
+            vmin = big["vol_total"].min()
+            vmax = big["vol_total"].quantile(0.97) or vmin  # recorta outlier extremo
+            span = (vmax - vmin) or 1
+            norm = ((big["vol_total"].clip(upper=vmax) - vmin) / span).clip(0, 1)
+            # raíz cuadrada para que el crecimiento sea perceptible; rango 14→60
+            big["size"] = 14 + 46 * np.sqrt(norm)
+            # color por dirección dominante de esa celda
+            big["color"] = np.where(big["net"] >= 0, "#2ecc71", "#e74c3c")
+            fig.add_trace(go.Scatter(
+                x=big["dt"], y=big["strike"], mode="markers",
+                marker=dict(size=big["size"], color=big["color"], opacity=0.85,
+                            line=dict(width=1, color="white")),
+                name="apuesta grande", text=big["vol_total"].round(0),
+                hovertemplate="VOL %{text}<br>strike %{y}<br>%{x}<extra></extra>"))
     else:
+        # ===== GEX / OI neto: burbujas como antes =====
+        bm = A.bubble_map_data(ticker, snap_date, expiration, metric=metric, volume_mode=vol_mode)
+        if bm.empty:
+            st.info(f"Sin timestamps intradía para {ticker} en este día.")
+            return
+        lo, hi = _window(spot)
+        bm = bm[(bm.strike >= lo) & (bm.strike <= hi)].copy()
+        bm["abs_mag"] = bm["magnitude"].abs()
+        ts_sorted = sorted(bm["ts"].unique())
+        pool = bm[bm["ts"] != ts_sorted[0]]["abs_mag"] if len(ts_sorted) > 1 else bm["abs_mag"]
+        cap = (pool.quantile(0.95) if len(pool) else bm["abs_mag"].max()) or 1
+        capped = bm["abs_mag"].clip(upper=cap)
+        bm["size"] = 6 + 34 * (np.log1p(capped) / (np.log1p(cap) or 1))
+        bm["dt"] = to_chile(bm["ts"])
         bm["color"] = bm["magnitude"].apply(lambda v: "#2ecc71" if v >= 0 else "#e74c3c")
         fig.add_trace(go.Scatter(x=bm["dt"], y=bm["strike"], mode="markers",
             marker=dict(size=bm["size"], color=bm["color"], opacity=0.75), name="magnitud",
             text=bm["magnitude"].round(0),
             hovertemplate="%{x}<br>strike %{y}<br>mag %{text}<extra></extra>"))
-    # --- Línea de precio real intradía + volumen de la acción ---
-    ph = A.load_price_history(ticker, snap_date)
+
+    # ---- Precio real + volumen de acción (todas las métricas) ----
     if not ph.empty:
         ph = ph.copy()
         ph["dt"] = to_chile(ph["bar_time"])
-        # volumen de la acción como barras sutiles al fondo (eje secundario)
         fig.add_trace(go.Bar(x=ph["dt"], y=ph["volume"], name="Vol acción",
-            marker_color="rgba(120,140,170,0.28)", yaxis="y2",
+            marker_color="rgba(120,140,170,0.22)", yaxis="y2",
             hovertemplate="vol acción %{y}<br>%{x}<extra></extra>"))
-        # línea de precio real (close por minuto)
         fig.add_trace(go.Scatter(x=ph["dt"], y=ph["close"], mode="lines",
             line=dict(color="white", width=2), name="precio",
             hovertemplate="precio %{y:.2f}<br>%{x}<extra></extra>"))
-    else:
-        # fallback: la línea de spot de las opciones (como antes)
-        sl = bm.drop_duplicates("ts")[["dt", "spot"]]
-        fig.add_trace(go.Scatter(x=sl["dt"], y=sl["spot"], mode="lines+markers",
-            line=dict(color="white", width=2), name="spot"))
 
-    fig.update_layout(height=440, yaxis_title="Strike",
+    fig.update_layout(height=460, yaxis_title="Strike",
         xaxis=dict(title="Hora", type="date", tickformat="%H:%M"),
         plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
         legend=dict(orientation="h"), margin=dict(t=10, b=10),
-        yaxis2=dict(overlaying="y", side="right", showgrid=False,
-                    title="Vol acción", rangemode="tozero",
-                    # comprime el volumen al tercio inferior para que no tape las burbujas
-                    range=[0, (ph["volume"].max() * 3) if not ph.empty and ph["volume"].max() else 1]))
+        yaxis2=dict(overlaying="y", side="right", showgrid=False, title="Vol acción",
+                    rangemode="tozero", range=[0, price_max * 3]))
     st.plotly_chart(fig, use_container_width=True, key=f"bubble_{key}")
 
 
