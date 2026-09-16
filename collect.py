@@ -66,6 +66,19 @@ def init_db(conn):
         CREATE INDEX IF NOT EXISTS idx_snap
         ON snapshots (ticker, snap_date, expiration, strike, type)
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS price_history (
+            ticker    TEXT,
+            snap_date TEXT,
+            bar_time  TEXT,     -- timestamp UTC de la vela (ISO)
+            open      REAL,
+            high      REAL,
+            low       REAL,
+            close     REAL,
+            volume    INTEGER,
+            PRIMARY KEY (ticker, bar_time)
+        )
+    """)
     conn.commit()
 
 
@@ -190,6 +203,40 @@ def _int(x):
 
 
 # ---------------------------------------------------------------------------
+# Precio/volumen intradía del subyacente
+# ---------------------------------------------------------------------------
+def fetch_price_history(ticker, conn):
+    """Baja las velas intradía de HOY (1 min) y las guarda. Idempotente:
+    usa INSERT OR REPLACE, así que correrlo varias veces al día actualiza."""
+    try:
+        tk = yf.Ticker(ticker)
+        hist = tk.history(period="1d", interval="1m")
+    except Exception as e:
+        print(f"    [!] sin precio intradía de {ticker}: {e}")
+        return 0
+    if hist is None or hist.empty:
+        return 0
+    rows = []
+    for idx, r in hist.iterrows():
+        # idx es un Timestamp con tz; lo pasamos a UTC ISO
+        try:
+            bar_utc = idx.tz_convert("UTC").isoformat()
+        except (TypeError, AttributeError):
+            bar_utc = str(idx)
+        snap_date = str(idx.date())
+        rows.append((
+            ticker, snap_date, bar_utc,
+            _num(r.get("Open")), _num(r.get("High")),
+            _num(r.get("Low")), _num(r.get("Close")),
+            _int(r.get("Volume")),
+        ))
+    conn.executemany(
+        "INSERT OR REPLACE INTO price_history VALUES (?,?,?,?,?,?,?,?)", rows)
+    conn.commit()
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -211,7 +258,9 @@ def main():
         )
         conn.commit()
         total += len(rows)
-        print(f"    spot={spot:.2f}  filas guardadas={len(rows)}")
+        # precio/volumen intradía del subyacente
+        nbars = fetch_price_history(ticker, conn)
+        print(f"    spot={spot:.2f}  filas={len(rows)}  velas_precio={nbars}")
 
     conn.close()
     print(f"[OK] Total filas: {total}. Guardado en {DB_PATH}")
