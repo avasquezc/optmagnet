@@ -250,3 +250,42 @@ def load_price_history(ticker, snap_date):
                 c, params=[ticker, snap_date])
         except Exception:
             return pd.DataFrame()
+
+
+def heatmap_data(ticker, snap_date, expiration=None, volume_mode="new"):
+    """
+    Datos para el heatmap de volumen + burbujas grandes.
+    Devuelve un DataFrame largo con: ts, strike, vol_call, vol_put, vol_total, net
+    (net = vol_call - vol_put, para el color divergente).
+    Respeta volume_mode ('new' = flujo por franja, 'cumulative' = acumulado).
+    """
+    tss = list_timestamps(ticker, snap_date)
+    frames = []
+    for ts in tss:
+        d = load_ts(ticker, ts, expiration)
+        if d.empty:
+            continue
+        spot = float(d["spot"].iloc[0])
+        piv = d.pivot_table(index="strike", columns="type", values="volume",
+                            aggfunc="sum", fill_value=0).reset_index()
+        for col in ("C", "P"):
+            if col not in piv:
+                piv[col] = 0
+        piv = piv.rename(columns={"C": "vol_call", "P": "vol_put"})
+        piv["ts"] = ts
+        piv["spot"] = spot
+        frames.append(piv[["ts", "strike", "vol_call", "vol_put", "spot"]])
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True).sort_values("ts")
+
+    # modo 'new': delta por franja para cada (strike) en call y put por separado
+    if volume_mode == "new":
+        for col in ("vol_call", "vol_put"):
+            out[col + "_prev"] = out.groupby("strike")[col].shift(1)
+            out[col] = (out[col] - out[col + "_prev"].fillna(0)).clip(lower=0)
+            out = out.drop(columns=[col + "_prev"])
+
+    out["vol_total"] = out["vol_call"] + out["vol_put"]
+    out["net"] = out["vol_call"] - out["vol_put"]
+    return out
