@@ -130,6 +130,17 @@ def fetch_ticker(ticker):
 
     now = dt.datetime.now(dt.timezone.utc)
     today = now.date()
+
+    # Guardamos solo los vencimientos dentro de MAX_EXP_DAYS días. Los lejanos
+    # (hasta 2027) inflan la base sin aportar: casi nunca los analizas.
+    def _within_horizon(e):
+        try:
+            ed = dt.datetime.strptime(e, "%Y-%m-%d").date()
+            return 0 <= (ed - today).days <= MAX_EXP_DAYS
+        except ValueError:
+            return False
+    expirations = [e for e in expirations if _within_horizon(e)]
+
     rows = []
 
     for exp in expirations:
@@ -236,6 +247,27 @@ def fetch_price_history(ticker, conn):
     return len(rows)
 
 
+RETENTION_DAYS = 15  # días de histórico a conservar; lo más viejo se borra
+MAX_EXP_DAYS = 45    # solo guardar vencimientos dentro de estos días (el resto infla la base)
+
+
+def prune_old_data(conn, days):
+    """Borra snapshots y velas de precio con más de `days` días de antigüedad,
+    y compacta la base (VACUUM) para recuperar el espacio en disco."""
+    cutoff = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM snapshots WHERE snap_date < ?", (cutoff,))
+    n1 = cur.rowcount
+    cur.execute("DELETE FROM price_history WHERE snap_date < ?", (cutoff,))
+    n2 = cur.rowcount
+    conn.commit()
+    # VACUUM recupera el espacio físico del archivo (clave para no pasar 100MB en git)
+    conn.execute("VACUUM")
+    conn.commit()
+    print(f"[limpieza] borradas {n1} filas de opciones y {n2} de precio "
+          f"anteriores a {cutoff}; base compactada.")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -261,6 +293,9 @@ def main():
         # precio/volumen intradía del subyacente
         nbars = fetch_price_history(ticker, conn)
         print(f"    spot={spot:.2f}  filas={len(rows)}  velas_precio={nbars}")
+
+    # --- Limpieza: conservar solo los últimos RETENTION_DAYS de histórico ---
+    prune_old_data(conn, RETENTION_DAYS)
 
     conn.close()
     print(f"[OK] Total filas: {total}. Guardado en {DB_PATH}")
