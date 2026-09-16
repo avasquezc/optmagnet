@@ -119,12 +119,32 @@ def render_bubble(ticker, key):
             marker=dict(size=bm["size"], color=bm["color"], opacity=0.75), name="magnitud",
             text=bm["magnitude"].round(0),
             hovertemplate="%{x}<br>strike %{y}<br>mag %{text}<extra></extra>"))
-    sl = bm.drop_duplicates("ts")[["hora", "spot"]]
-    fig.add_trace(go.Scatter(x=sl["hora"], y=sl["spot"], mode="lines+markers",
-        line=dict(color="white", width=2), name="spot"))
-    fig.update_layout(height=420, xaxis_title="Hora", yaxis_title="Strike",
+    # --- Línea de precio real intradía + volumen de la acción ---
+    ph = A.load_price_history(ticker, snap_date)
+    if not ph.empty:
+        ph = ph.copy()
+        ph["hora"] = to_chile(ph["bar_time"]).dt.strftime("%H:%M")
+        # volumen de la acción como barras sutiles al fondo (eje secundario)
+        fig.add_trace(go.Bar(x=ph["hora"], y=ph["volume"], name="Vol acción",
+            marker_color="rgba(120,140,170,0.28)", yaxis="y2",
+            hovertemplate="vol acción %{y}<br>%{x}<extra></extra>"))
+        # línea de precio real (close por minuto)
+        fig.add_trace(go.Scatter(x=ph["hora"], y=ph["close"], mode="lines",
+            line=dict(color="white", width=2), name="precio",
+            hovertemplate="precio %{y:.2f}<br>%{x}<extra></extra>"))
+    else:
+        # fallback: la línea de spot de las opciones (como antes)
+        sl = bm.drop_duplicates("ts")[["hora", "spot"]]
+        fig.add_trace(go.Scatter(x=sl["hora"], y=sl["spot"], mode="lines+markers",
+            line=dict(color="white", width=2), name="spot"))
+
+    fig.update_layout(height=440, xaxis_title="Hora", yaxis_title="Strike",
         plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
-        legend=dict(orientation="h"), margin=dict(t=10, b=10))
+        legend=dict(orientation="h"), margin=dict(t=10, b=10),
+        yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                    title="Vol acción", rangemode="tozero",
+                    # comprime el volumen al tercio inferior para que no tape las burbujas
+                    range=[0, (ph["volume"].max() * 3) if not ph.empty and ph["volume"].max() else 1]))
     st.plotly_chart(fig, use_container_width=True, key=f"bubble_{key}")
 
 
