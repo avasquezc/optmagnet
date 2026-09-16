@@ -94,7 +94,8 @@ def render_bubble(ticker, key):
     df_last = A.load_ts(ticker, tss[-1], expiration) if tss else A.load(ticker, snap_date, expiration)
     spot = A.spot_of(df_last)
     st.markdown(f"**{ticker}** · spot ${spot:,.2f}" if spot else f"**{ticker}**")
-    bm = A.bubble_map_data(ticker, snap_date, expiration, metric=metric)
+    vol_mode = st.session_state.get("_vol_mode", "new")
+    bm = A.bubble_map_data(ticker, snap_date, expiration, metric=metric, volume_mode=vol_mode)
     if bm.empty:
         st.info(f"Sin timestamps intradía para {ticker} en este día.")
         return
@@ -234,6 +235,15 @@ tab1, tab2, tab3 = st.tabs(["🫧 Mapa de burbujas (intradía)",
 with tab1:
     st.caption("📖 **La película**: evolución en el tiempo. Con métrica=Volumen ves entrar el "
                "flujo fresco. Los dos tickers, mismo tamaño, para comparar la evolución horaria.")
+    if metric == "volume":
+        vol_mode = st.radio("Modo de volumen", ["new", "cumulative"], horizontal=True,
+            format_func=lambda m: "🆕 Nuevo por franja (flujo fresco)" if m == "new"
+                                  else "Σ Acumulado del día",
+            help="'Nuevo por franja' muestra cuánto volumen entró desde la corrida anterior — "
+                 "detecta flujo fresco y evita la distorsión del acumulado sucio de la fuente.")
+    else:
+        vol_mode = "new"
+    st.session_state["_vol_mode"] = vol_mode
     paired(render_bubble)
 
 with tab2:
