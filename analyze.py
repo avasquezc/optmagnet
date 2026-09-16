@@ -223,3 +223,14 @@ def gamma_levels(df, snap_date):
             flip = x0 + (x1 - x0) * (0 - y0) / (y1 - y0) if (y1 - y0) else x1
             break
     return {"gamma_flip": flip, "gex_peak": gex_peak}
+
+
+def load_price_history(ticker, snap_date):
+    """Velas intradía del subyacente para un día. Vacío si no hay."""
+    with _conn() as c:
+        try:
+            return pd.read_sql_query(
+                "SELECT * FROM price_history WHERE ticker=? AND snap_date=? ORDER BY bar_time",
+                c, params=[ticker, snap_date])
+        except Exception:
+            return pd.DataFrame()
