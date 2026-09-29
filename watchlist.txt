@@ -2,4 +2,3 @@
 # Edita esto para cambiar qué instrumentos monitoreas.
 META
 QQQ
-SPY
